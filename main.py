@@ -125,14 +125,33 @@ async def upload_file(file: UploadFile = File(...)):
                 })
 
         print(f">>> 解析完成，提取了 {len(points)} 个点")
-        # 序列化 timestamp
+        
+        df_qc = pd.DataFrame(points)
+        if 'timestamp' in df_qc.columns:
+            df_qc['timestamp'] = pd.to_datetime(df_qc['timestamp'])
+        
+        # 使用默认配置进行检测
+        default_config = {
+            'qc_max_speed': 33.3, 
+            'qc_max_angle': 60.0,
+            'qc_max_time_gap': 60.0
+        }
+        
+        processor = TrajectoryProcessor(df_qc)
+        qc_summary, qc_details = processor.check_quality(default_config)
+        
+        # 序列化 timestamp 用于 JSON 返回
         for p in points:
-            p['timestamp'] = p['timestamp'].isoformat()
+            if isinstance(p.get('timestamp'), pd.Timestamp):
+                p['timestamp'] = p['timestamp'].isoformat()
 
         return {
             "status": "success", 
             "count": len(points), 
-            "data": points
+            "data": points,
+            # 返回质检结果
+            "qc_summary": qc_summary,
+            "qc_details": qc_details
         }
         
     except Exception as e:
@@ -155,7 +174,7 @@ async def process(data: dict):
     processor = TrajectoryProcessor(raw_df)
     
     # 0. 质量检测 (在清洗前进行)
-    quality_report = processor.check_quality(config)
+    # quality_report = processor.check_quality(config)
 
     # 1. 预处理
     df_cleaned = processor.preprocess_pipeline(config)
@@ -172,7 +191,6 @@ async def process(data: dict):
     return {
         "trajectory_processed": df_cleaned.to_dict(orient='records'),
         "trajectory_matched": df_matched.to_dict(orient='records'),
-        "quality_report": quality_report,
         "message": msg
     }
 

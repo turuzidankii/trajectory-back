@@ -314,86 +314,86 @@ class TrajectoryProcessor:
 
     def check_quality(self, config: dict):
         """
-        质量检测模块
-        维度: 时间间隔、字段完整性、速度异常、转角异常
-        公式: H = 100 * (1 - sum(si * wi))
+        质量检测模块 (修改版)
+        返回: 
+        1. summary: 总体评分和统计
+        2. details: 包含每个点状态的列表 (用于前端表格展示)
         """
-        print(f"\n>>> [质量检测] 开始执行...")
         df = self.df.copy()
-        if len(df) < 2:
-            return {"score": 0, "details": []}
-
-        # 1. 参数提取
-        weights = config.get('quality_weights', {
-            'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25
-        })
-        
-        # 阈值设置
-        max_speed = float(config.get('qc_max_speed', 33.3)) # m/s, ~120km/h
-        max_angle = float(config.get('qc_max_angle', 60.0)) # 度
-        max_time_gap = float(config.get('qc_max_time_gap', 60.0)) # 秒
-        
         total_points = len(df)
-        anomalies = {
-            'time': [], 'integrity': [], 'speed': [], 'angle': []
-        }
-
-        # --- 计算辅助列 ---
-        # 坐标差
+        
+        # 默认权重与阈值
+        weights = config.get('quality_weights', {'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25})
+        max_speed = float(config.get('qc_max_speed', 33.3)) 
+        max_angle = float(config.get('qc_max_angle', 60.0)) 
+        max_time_gap = float(config.get('qc_max_time_gap', 60.0))
+        
+        # --- 计算辅助列 (与之前相同) ---
         df['prev_lat'] = df['lat'].shift(1)
         df['prev_lon'] = df['lon'].shift(1)
-        # 距离 (米)
         lat_diff = (df['lat'] - df['prev_lat']) * 111000
-        lon_diff = (df['lon'] - df['prev_lon']) * 111000 * 0.76 # 北京附近近似
-        df['dist_m'] = np.sqrt(lat_diff**2 + lon_diff**2)
+        lon_diff = (df['lon'] - df['prev_lon']) * 111000 * 0.76 
+        df['dist_m'] = np.sqrt(lat_diff**2 + lon_diff**2).fillna(0)
         
-        # 时间差 (秒)
         if 'timestamp' in df.columns:
-            df['time_diff'] = df['timestamp'].diff().dt.total_seconds()
+            df['time_diff'] = df['timestamp'].diff().dt.total_seconds().fillna(0)
         else:
-            df['time_diff'] = 1.0 # 默认
+            df['time_diff'] = 1.0 
 
-        # 速度 (m/s)
-        df['speed_mps'] = df['dist_m'] / df['time_diff'].replace(0, 0.001)
-
-        # 航向角
-        # atan2(y, x) -> result in (-pi, pi)
-        # y = lat_diff, x = lon_diff
-        df['heading'] = np.degrees(np.arctan2(lat_diff, lon_diff))
-        df['heading_diff'] = df['heading'].diff().abs()
-        # 处理 360 度跳变 (如 179 -> -179, diff=358, 实际应为 2)
-        df['heading_diff'] = df['heading_diff'].apply(lambda x: min(x, 360 - x) if not pd.isna(x) else 0)
-
-        # --- 维度 1: 字段完整性 (Integrity) ---
-        # 检查关键字段是否为空或非法
-        mask_integrity = (df['lat'].isnull()) | (df['lon'].isnull()) | \
-                         ((df['lat'] == 0) & (df['lon'] == 0)) 
-        if 'timestamp' in df.columns:
-            mask_integrity |= df['timestamp'].isnull()
+        df['speed_mps'] = (df['dist_m'] / df['time_diff'].replace(0, 0.001)).fillna(0)
         
-        anomalies['integrity'] = df[mask_integrity].index.tolist()
-        s_integrity = len(anomalies['integrity']) / total_points
+        df['heading'] = np.degrees(np.arctan2(lat_diff, lon_diff))
+        df['heading_diff'] = df['heading'].diff().abs().fillna(0)
+        df['heading_diff'] = df['heading_diff'].apply(lambda x: min(x, 360 - x))
 
-        # --- 维度 2: 时间间隔 (Time) ---
-        # 检查采样间隔是否过大 (丢点)
+        # --- 异常检测掩码 ---
+        # 1. 完整性 (坐标为0或空)
+        mask_integrity = (df['road'] == '') | (df['status'] == '') | (df['lat'].isnull()) | (df['lon'].isnull()) | ((df['lat'] == 0) & (df['lon'] == 0))
+        
+        # 2. 时间间隔 (跳变)
         mask_time = df['time_diff'] > max_time_gap
-        anomalies['time'] = df[mask_time].index.tolist()
-        s_time = len(anomalies['time']) / total_points
-
-        # --- 维度 3: 速度异常 (Speed) ---
-        # 速度过大
+        
+        # 3. 速度异常
         mask_speed = df['speed_mps'] > max_speed
-        anomalies['speed'] = df[mask_speed].index.tolist()
-        s_speed = len(anomalies['speed']) / total_points
-
-        # --- 维度 4: 转角异常 (Angle) ---
-        # 急转弯 (且必须有一定距离移动，防止静止漂移导致的计算异常)
+        
+        # 4. 转角异常
         mask_angle = (df['heading_diff'] > max_angle) & (df['dist_m'] > 2.0)
-        anomalies['angle'] = df[mask_angle].index.tolist()
-        s_angle = len(anomalies['angle']) / total_points
+
+        # --- 📝 核心修改：生成逐点详情 ---
+        # 初始化状态列表
+        df['qc_status'] = '正常'
+        df['qc_tags'] = [[] for _ in range(len(df))]
+
+        # 标记异常 (使用 loc 批量处理)
+        # 注意：这里我们把异常具体原因写入 qc_tags
+        
+        # 记录索引以便统计
+        anomalies = {
+            'time': df[mask_time].index.tolist(),
+            'integrity': df[mask_integrity].index.tolist(),
+            'speed': df[mask_speed].index.tolist(),
+            'angle': df[mask_angle].index.tolist()
+        }
+        
+        # 将 Tag 注入 DataFrame (稍微有点慢但直观)
+        for idx in df[mask_integrity].index: df.at[idx, 'qc_tags'].append('缺失/零值')
+        for idx in df[mask_time].index: df.at[idx, 'qc_tags'].append('时间断裂')
+        for idx in df[mask_speed].index: df.at[idx, 'qc_tags'].append(f'速度过快({df.at[idx, "speed_mps"]:.1f}m/s)')
+        for idx in df[mask_angle].index: df.at[idx, 'qc_tags'].append(f'急转弯({df.at[idx, "heading_diff"]:.0f}°)')
+
+        # 格式化输出
+        def format_status(tags):
+            return " | ".join(tags) if tags else "正常"
+            
+        df['qc_desc'] = df['qc_tags'].apply(format_status)
+        df['is_abnormal'] = df['qc_tags'].apply(lambda x: len(x) > 0)
 
         # --- 计算总分 ---
-        # H = 100 * (1 - sum(si * wi))
+        s_integrity = len(anomalies['integrity']) / total_points
+        s_time = len(anomalies['time']) / total_points
+        s_speed = len(anomalies['speed']) / total_points
+        s_angle = len(anomalies['angle']) / total_points
+
         deduction = (
             s_time * weights.get('time', 0.25) +
             s_integrity * weights.get('integrity', 0.25) +
@@ -402,22 +402,31 @@ class TrajectoryProcessor:
         )
         score = max(0, 100 * (1 - deduction))
 
-        print(f"    -> [QC] Score: {score:.2f}, Anomalies: Time={len(anomalies['time'])}, Speed={len(anomalies['speed'])}, Angle={len(anomalies['angle'])}")
+        # --- 构造返回数据 ---
+        # 详情列表：包含前端展示需要的列
+        details_list = []
+        for idx, row in df.iterrows():
+            details_list.append({
+                "id": idx,
+                "road": row['road'],
+                "situation": row['status'],
+                "timestamp": row['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(row.get('timestamp')) else '-',
+                "lat": row['lat'],
+                "lon": row['lon'],
+                "speed": round(row['speed_mps'], 2),
+                "angle_diff": round(row['heading_diff'], 1),
+                "status": row['qc_desc'],
+                "is_error": row['is_abnormal']
+            })
 
-        # 构建返回给前端的详细报告
-        # 我们把每一行的异常状态标记出来，返回一个精简列表
-        # 为了前端展示，我们需要把 anomaly indices 转换成前端能理解的格式
-        
-        return {
-            "qc_score": round(score, 1),
-            "qc_summary": {
-                "time": {"count": len(anomalies['time']), "ratio": s_time, "weight": weights.get('time')},
-                "integrity": {"count": len(anomalies['integrity']), "ratio": s_integrity, "weight": weights.get('integrity')},
-                "speed": {"count": len(anomalies['speed']), "ratio": s_speed, "weight": weights.get('speed')},
-                "angle": {"count": len(anomalies['angle']), "ratio": s_angle, "weight": weights.get('angle')}
-            },
-            # 可选：返回异常点的 ID 列表，供前端高亮
-            "qc_anomalies_indices": {
-                k: [int(i) for i in v] for k, v in anomalies.items()
+        summary = {
+            "score": round(score, 1),
+            "counts": {
+                "time": len(anomalies['time']),
+                "integrity": len(anomalies['integrity']),
+                "speed": len(anomalies['speed']),
+                "angle": len(anomalies['angle'])
             }
         }
+
+        return summary, details_list
