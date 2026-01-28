@@ -9,7 +9,7 @@ import os
 import pickle  # 👈 引入 pickle
 
 # 配置路径
-DATA_DIR = "data"
+DATA_DIR = "../data"
 LOCAL_ROAD_FILE = os.path.join(DATA_DIR, "25M3_rbeijing_gcj02.csv") # 确保这个文件名对
 # 🔥 缓存文件路径 (自动生成)
 CACHE_FILE = os.path.join(DATA_DIR, "road_network_cache.pkl")

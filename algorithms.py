@@ -3,6 +3,7 @@ import numpy as np
 import time
 import os
 from road_network import road_network_service
+from ivmm import SimpleIVMM
 
 # 引入 LeuvenMapMatching
 try:
@@ -106,6 +107,8 @@ class TrajectoryProcessor:
         
         if algorithm == 'HMM':
             res, msg = self._match_hmm_leuven(df_input, config)
+        elif algorithm == 'IVMM':
+            res, msg = self._match_ivmm(df_input, config)
         else:
             res, msg = self._match_simple(df_input)
             
@@ -256,6 +259,54 @@ class TrajectoryProcessor:
             else:
                 matched.append({'lat': row['lat'], 'lon': row['lon']})
         return pd.DataFrame(matched), "Simple 匹配完成"
+
+    def _match_ivmm(self, df, config=None):
+        """IVMM 匹配 (调用 ivmm.py)"""
+        config = config or {}
+        print(f"    -> [IVMM] 开始匹配...")
+
+        try:
+            # 从配置读取参数
+            search_radius = float(config.get('ivmm_search_radius', 100))
+            w_dist = float(config.get('ivmm_w_dist', 0.6))
+            w_heading = float(config.get('ivmm_w_heading', 0.4))
+
+            matcher = SimpleIVMM(
+                search_radius=search_radius,
+                w_dist=w_dist,
+                w_heading=w_heading
+            )
+
+            # 轨迹点序列
+            trajectory = []
+            for _, row in df.iterrows():
+                trajectory.append({
+                    'lat': row['lat'],
+                    'lon': row['lon'],
+                    'timestamp': row['timestamp'] if 'timestamp' in row else None
+                })
+
+            matched_candidates = matcher.match(trajectory)
+            if not matched_candidates:
+                return self._match_simple(df)
+
+            # 输出 matched 点坐标 (投影点优先)
+            matched_points = []
+            for cand in matched_candidates:
+                if 'proj_point' in cand and cand['proj_point'] is not None:
+                    p = cand['proj_point']
+                    matched_points.append({'lat': p.y, 'lon': p.x})
+                elif 'lat' in cand and 'lon' in cand:
+                    matched_points.append({'lat': cand['lat'], 'lon': cand['lon']})
+
+            if len(matched_points) < 1:
+                return self._match_simple(df)
+
+            return pd.DataFrame(matched_points), "✅ IVMM 匹配成功"
+
+        except Exception as e:
+            print(f"❌ [IVMM] 异常: {e}")
+            return self._match_simple(df)
 
     def quality_check(self, df):
         """简单质检"""
