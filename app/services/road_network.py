@@ -6,14 +6,14 @@ from shapely.strtree import STRtree
 from leuvenmapmatching.map.inmem import InMemMap
 import logging
 import os
-import pickle  # 👈 引入 pickle
+import pickle
 
 # 配置路径
 DATA_DIR = "../data"
-LOCAL_ROAD_FILE = os.path.join(DATA_DIR, "25M3_rbeijing_gcj02.csv") # 确保这个文件名对
-# 🔥 缓存文件路径 (自动生成)
+LOCAL_ROAD_FILE = os.path.join(DATA_DIR, "25M3_rbeijing_gcj02.csv")
 CACHE_FILE = os.path.join(DATA_DIR, "road_network_cache.pkl")
 CACHE_VERSION = 2
+
 
 class RoadNetwork:
     def __init__(self):
@@ -22,7 +22,7 @@ class RoadNetwork:
         self.geometries = []
         self.indices = []
         self.is_loaded = False
-        self.hmm_map = None 
+        self.hmm_map = None
         self.graph = None
         self.edge_geom_map = {}
 
@@ -110,7 +110,6 @@ class RoadNetwork:
                 logging.info("✅ HMM 空间索引已构建")
                 return
             if hasattr(self.hmm_map, "index"):
-                # 某些版本可能提供 index 属性或方法
                 idx = self.hmm_map.index
                 if callable(idx):
                     idx()
@@ -142,7 +141,6 @@ class RoadNetwork:
         """
         智能加载：优先读取 .pkl 缓存，如果没有则解析 CSV 并生成缓存
         """
-        # 1. 尝试读取缓存 (极速模式)
         if os.path.exists(CACHE_FILE):
             try:
                 logging.info(f"🚀 发现缓存文件，正在快速恢复路网: {CACHE_FILE}")
@@ -151,42 +149,33 @@ class RoadNetwork:
 
                 if cache_data.get('cache_version') != CACHE_VERSION:
                     raise ValueError("cache_version_mismatch")
-                
-                # 恢复数据
+
                 self.gdf = cache_data['gdf']
                 self.hmm_map = cache_data['hmm_map']
-                self.geometries = list(self.gdf['shapely_geom']) # 确保转回 list
+                self.geometries = list(self.gdf['shapely_geom'])
                 self.indices = list(self.gdf.index)
-                # 统一节点ID类型，避免匹配几何失败
                 if 'SnodeID' in self.gdf.columns and 'EnodeID' in self.gdf.columns:
                     self.gdf['SnodeID'] = self.gdf['SnodeID'].astype(str).map(self._normalize_node_id)
                     self.gdf['EnodeID'] = self.gdf['EnodeID'].astype(str).map(self._normalize_node_id)
-                
-                # ⚠️ STRtree 通常不能直接 pickle (包含 C 指针)，需要重新构建
-                # 但构建树比解析 CSV 快得多，瞬间就能完成
+
                 logging.info("⚡ 正在重建空间索引...")
                 self.sindex = STRtree(self.geometries)
-                
+
                 self.is_loaded = True
-                # 重建拓扑图与边几何索引
                 self._build_graph_and_edge_map()
-                # 重新构建 HMM 空间索引
                 self._ensure_hmm_index()
                 logging.info(f"✅ 缓存加载成功! (HMM节点数: {self.hmm_map.size()})")
                 return True, "缓存加载成功"
             except Exception as e:
                 logging.warning(f"⚠️ 缓存文件损坏或版本不兼容，将重新解析 CSV: {e}")
-                # 如果读取缓存失败，就继续往下走，重新解析 CSV
 
-        # 2. 解析 CSV (慢速模式 - 仅第一次)
         if not os.path.exists(LOCAL_ROAD_FILE):
             logging.error(f"路网文件未找到: {LOCAL_ROAD_FILE}")
             return False, "文件不存在"
-        
+
         try:
             logging.info("🐢 未找到缓存，正在从 CSV 解析路网 (耗时操作)...")
-            
-            # --- 解析逻辑：模仿 match_and_plot 的 CSV 读取方式 ---
+
             header = self._read_header(LOCAL_ROAD_FILE)
             geom_idx = header.index("geometry") if "geometry" in header else None
             records = []
@@ -243,13 +232,11 @@ class RoadNetwork:
 
             df = pd.DataFrame.from_records(records)
 
-            # 保存到 self
             df['shapely_geom'] = [None] * len(df)
             for i, list_idx in enumerate(valid_indices):
                 df.at[list_idx, 'shapely_geom'] = valid_geoms[i]
 
             self.gdf = df.dropna(subset=['shapely_geom'])
-            # 统一节点ID类型，避免匹配几何失败
             if 'SnodeID' in self.gdf.columns and 'EnodeID' in self.gdf.columns:
                 self.gdf['SnodeID'] = self.gdf['SnodeID'].astype(str).map(self._normalize_node_id)
                 self.gdf['EnodeID'] = self.gdf['EnodeID'].astype(str).map(self._normalize_node_id)
@@ -257,18 +244,15 @@ class RoadNetwork:
             self.indices = valid_indices
             self.sindex = STRtree(self.geometries)
             self.is_loaded = True
-            # 构建拓扑图与边几何索引
             self._build_graph_and_edge_map()
-            # 构建 HMM 空间索引
             self._ensure_hmm_index()
-            
-            # 3. 🔥 生成缓存文件 🔥
+
             logging.info(f"💾 正在生成缓存文件 (下次启动将秒开)...")
             try:
                 cache_data = {
                     'cache_version': CACHE_VERSION,
                     'gdf': self.gdf,
-                    'hmm_map': self.hmm_map
+                    'hmm_map': self.hmm_map,
                 }
                 with open(CACHE_FILE, 'wb') as f:
                     pickle.dump(cache_data, f)
@@ -276,8 +260,8 @@ class RoadNetwork:
             except Exception as e:
                 logging.error(f"❌ 缓存保存失败: {e}")
 
-            return True, f"加载成功 (已生成缓存)"
-            
+            return True, "加载成功 (已生成缓存)"
+
         except Exception as e:
             logging.error(f"加载异常: {e}")
             import traceback
@@ -295,7 +279,6 @@ class RoadNetwork:
         self.edge_geom_map = {}
 
         def _line_length_m(line):
-            # 基于经纬度的近似长度 (米)
             coords = list(line.coords)
             if len(coords) < 2:
                 return 0.0
@@ -303,7 +286,6 @@ class RoadNetwork:
             for i in range(len(coords) - 1):
                 lon1, lat1 = coords[i]
                 lon2, lat2 = coords[i + 1]
-                # 简单近似：经纬度转米
                 dx = (lon2 - lon1) * 111000 * 0.76
                 dy = (lat2 - lat1) * 111000
                 total += (dx * dx + dy * dy) ** 0.5
@@ -360,7 +342,8 @@ class RoadNetwork:
             return []
 
     def get_candidates(self, lat, lon, radius=50):
-        if not self.is_loaded: return []
+        if not self.is_loaded:
+            return []
         buffer_deg = radius / 111000.0
         query_box = box(lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg)
         candidate_indices = self.sindex.query(query_box)
@@ -369,22 +352,23 @@ class RoadNetwork:
         for idx in candidate_indices:
             geom = self.geometries[idx]
             dist_deg = point.distance(geom)
-            dist_m = dist_deg * 111000 
+            dist_m = dist_deg * 111000
             if dist_m <= radius:
-                row_idx = self.indices[idx] 
+                row_idx = self.indices[idx]
                 row = self.gdf.loc[row_idx]
-                proj_dist = geom.project(point) 
+                proj_dist = geom.project(point)
                 proj_point = geom.interpolate(proj_dist)
                 candidates.append({
                     "edge_id": row.get('ID', idx),
                     "dist_m": dist_m,
                     "proj_point": proj_point,
-                    "geometry": geom # 供手写HMM使用
+                    "geometry": geom,
                 })
         return candidates
 
     def query_roads_in_bounds(self, min_lat, min_lon, max_lat, max_lon, buffer=0.01):
-        if not self.is_loaded: return []
+        if not self.is_loaded:
+            return []
         search_box = box(min_lon - buffer, min_lat - buffer, max_lon + buffer, max_lat + buffer)
         indices = self.sindex.query(search_box)
         segments = []
@@ -398,18 +382,19 @@ class RoadNetwork:
         try:
             u_key = self._normalize_node_id(u)
             v_key = self._normalize_node_id(v)
-            # 先从边映射中取几何
             key = (u_key, v_key)
             if key in self.edge_geom_map and self.edge_geom_map[key]:
-                # 选择最短的一条作为代表
                 return sorted(self.edge_geom_map[key], key=lambda x: x[0])[0][1]
             rows = self.gdf[(self.gdf['SnodeID'] == u_key) & (self.gdf['EnodeID'] == v_key)]
-            if not rows.empty: return rows.iloc[0]['shapely_geom']
-            
+            if not rows.empty:
+                return rows.iloc[0]['shapely_geom']
+
             rows = self.gdf[(self.gdf['SnodeID'] == v_key) & (self.gdf['EnodeID'] == u_key)]
-            if not rows.empty: return rows.iloc[0]['shapely_geom']
+            if not rows.empty:
+                return rows.iloc[0]['shapely_geom']
             return None
-        except:
+        except Exception:
             return None
+
 
 road_network_service = RoadNetwork()
