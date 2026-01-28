@@ -18,7 +18,11 @@ class TrajectoryProcessor:
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
         if 'timestamp' in self.df.columns:
-            self.df['timestamp'] = pd.to_datetime(self.df['timestamp'])
+            ts_raw = self.df['timestamp']
+            parsed = pd.to_datetime(ts_raw, errors='coerce', format='ISO8601')
+            if parsed.isna().any():
+                parsed = pd.to_datetime(ts_raw, errors='coerce', format='mixed')
+            self.df['timestamp'] = parsed
             self.df = self.df.sort_values('timestamp')
 
     def preprocess_pipeline(self, config: dict):
@@ -308,6 +312,112 @@ class TrajectoryProcessor:
             print(f"❌ [IVMM] 异常: {e}")
             return self._match_simple(df)
 
-    def quality_check(self, df):
-        """简单质检"""
-        return {"point_count": len(df)}
+    def check_quality(self, config: dict):
+        """
+        质量检测模块
+        维度: 时间间隔、字段完整性、速度异常、转角异常
+        公式: H = 100 * (1 - sum(si * wi))
+        """
+        print(f"\n>>> [质量检测] 开始执行...")
+        df = self.df.copy()
+        if len(df) < 2:
+            return {"score": 0, "details": []}
+
+        # 1. 参数提取
+        weights = config.get('quality_weights', {
+            'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25
+        })
+        
+        # 阈值设置
+        max_speed = float(config.get('qc_max_speed', 33.3)) # m/s, ~120km/h
+        max_angle = float(config.get('qc_max_angle', 60.0)) # 度
+        max_time_gap = float(config.get('qc_max_time_gap', 60.0)) # 秒
+        
+        total_points = len(df)
+        anomalies = {
+            'time': [], 'integrity': [], 'speed': [], 'angle': []
+        }
+
+        # --- 计算辅助列 ---
+        # 坐标差
+        df['prev_lat'] = df['lat'].shift(1)
+        df['prev_lon'] = df['lon'].shift(1)
+        # 距离 (米)
+        lat_diff = (df['lat'] - df['prev_lat']) * 111000
+        lon_diff = (df['lon'] - df['prev_lon']) * 111000 * 0.76 # 北京附近近似
+        df['dist_m'] = np.sqrt(lat_diff**2 + lon_diff**2)
+        
+        # 时间差 (秒)
+        if 'timestamp' in df.columns:
+            df['time_diff'] = df['timestamp'].diff().dt.total_seconds()
+        else:
+            df['time_diff'] = 1.0 # 默认
+
+        # 速度 (m/s)
+        df['speed_mps'] = df['dist_m'] / df['time_diff'].replace(0, 0.001)
+
+        # 航向角
+        # atan2(y, x) -> result in (-pi, pi)
+        # y = lat_diff, x = lon_diff
+        df['heading'] = np.degrees(np.arctan2(lat_diff, lon_diff))
+        df['heading_diff'] = df['heading'].diff().abs()
+        # 处理 360 度跳变 (如 179 -> -179, diff=358, 实际应为 2)
+        df['heading_diff'] = df['heading_diff'].apply(lambda x: min(x, 360 - x) if not pd.isna(x) else 0)
+
+        # --- 维度 1: 字段完整性 (Integrity) ---
+        # 检查关键字段是否为空或非法
+        mask_integrity = (df['lat'].isnull()) | (df['lon'].isnull()) | \
+                         ((df['lat'] == 0) & (df['lon'] == 0)) 
+        if 'timestamp' in df.columns:
+            mask_integrity |= df['timestamp'].isnull()
+        
+        anomalies['integrity'] = df[mask_integrity].index.tolist()
+        s_integrity = len(anomalies['integrity']) / total_points
+
+        # --- 维度 2: 时间间隔 (Time) ---
+        # 检查采样间隔是否过大 (丢点)
+        mask_time = df['time_diff'] > max_time_gap
+        anomalies['time'] = df[mask_time].index.tolist()
+        s_time = len(anomalies['time']) / total_points
+
+        # --- 维度 3: 速度异常 (Speed) ---
+        # 速度过大
+        mask_speed = df['speed_mps'] > max_speed
+        anomalies['speed'] = df[mask_speed].index.tolist()
+        s_speed = len(anomalies['speed']) / total_points
+
+        # --- 维度 4: 转角异常 (Angle) ---
+        # 急转弯 (且必须有一定距离移动，防止静止漂移导致的计算异常)
+        mask_angle = (df['heading_diff'] > max_angle) & (df['dist_m'] > 2.0)
+        anomalies['angle'] = df[mask_angle].index.tolist()
+        s_angle = len(anomalies['angle']) / total_points
+
+        # --- 计算总分 ---
+        # H = 100 * (1 - sum(si * wi))
+        deduction = (
+            s_time * weights.get('time', 0.25) +
+            s_integrity * weights.get('integrity', 0.25) +
+            s_speed * weights.get('speed', 0.25) +
+            s_angle * weights.get('angle', 0.25)
+        )
+        score = max(0, 100 * (1 - deduction))
+
+        print(f"    -> [QC] Score: {score:.2f}, Anomalies: Time={len(anomalies['time'])}, Speed={len(anomalies['speed'])}, Angle={len(anomalies['angle'])}")
+
+        # 构建返回给前端的详细报告
+        # 我们把每一行的异常状态标记出来，返回一个精简列表
+        # 为了前端展示，我们需要把 anomaly indices 转换成前端能理解的格式
+        
+        return {
+            "qc_score": round(score, 1),
+            "qc_summary": {
+                "time": {"count": len(anomalies['time']), "ratio": s_time, "weight": weights.get('time')},
+                "integrity": {"count": len(anomalies['integrity']), "ratio": s_integrity, "weight": weights.get('integrity')},
+                "speed": {"count": len(anomalies['speed']), "ratio": s_speed, "weight": weights.get('speed')},
+                "angle": {"count": len(anomalies['angle']), "ratio": s_angle, "weight": weights.get('angle')}
+            },
+            # 可选：返回异常点的 ID 列表，供前端高亮
+            "qc_anomalies_indices": {
+                k: [int(i) for i in v] for k, v in anomalies.items()
+            }
+        }
