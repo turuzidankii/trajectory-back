@@ -28,6 +28,14 @@ def map_match(df_input, algorithm='Simple', config=None):
     else:
         res, msg = _match_simple(df_input)
 
+    output_path = os.path.join(os.path.dirname(__file__), '../../output', 'match_result.csv')
+    try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        res.to_csv(output_path, index=False)
+        print(f"✅ [路径匹配] 已输出结果: {output_path}")
+    except Exception as output_e:
+        print(f"⚠️ [路径匹配] 输出失败: {output_e}")
+
     print(f">>> [路径匹配] 结束")
     return res, msg
 
@@ -53,6 +61,7 @@ def _match_hmm_leuven(df, config=None):
         if 'timestamp' in df.columns:
             df = df.sort_values('timestamp')
         path = list(zip(df['lat'], df['lon']))
+        timestamps = df['timestamp'].tolist() if 'timestamp' in df.columns else None
 
         if len(path) > 0:
             lats = [p[0] for p in path]
@@ -111,7 +120,15 @@ def _match_hmm_leuven(df, config=None):
         print(f"    -> [Leuven] 解析匹配路径...")
         last_point = None
 
-        for item in states:
+        last_ts = None
+        for idx, item in enumerate(states):
+            ts = None
+            if timestamps is not None and idx < len(timestamps):
+                ts = timestamps[idx]
+            elif last_ts is not None:
+                ts = last_ts
+            if ts is not None:
+                last_ts = ts
             try:
                 if isinstance(item, tuple) and len(item) == 2:
                     u, v = item
@@ -120,19 +137,19 @@ def _match_hmm_leuven(df, config=None):
                     if cu is not None:
                         pt = (cu[0], cu[1])
                         if pt != last_point:
-                            matched_points.append({'lat': cu[0], 'lon': cu[1]})
+                            matched_points.append({'lat': cu[0], 'lon': cu[1], 'timestamp': ts})
                             last_point = pt
                     if cv is not None:
                         pt = (cv[0], cv[1])
                         if pt != last_point:
-                            matched_points.append({'lat': cv[0], 'lon': cv[1]})
+                            matched_points.append({'lat': cv[0], 'lon': cv[1], 'timestamp': ts})
                             last_point = pt
                 else:
                     coord = map_con.node_coordinates(item)
                     if coord is not None:
                         pt = (coord[0], coord[1])
                         if pt != last_point:
-                            matched_points.append({'lat': coord[0], 'lon': coord[1]})
+                            matched_points.append({'lat': coord[0], 'lon': coord[1], 'timestamp': ts})
                             last_point = pt
             except Exception as parse_e:
                 if debug_match:
@@ -158,14 +175,16 @@ def _match_simple(df, radius=50):
     """最近邻吸附"""
     print(f"    -> [Simple] 执行最近邻搜索...")
     matched = []
+    has_ts = 'timestamp' in df.columns
     for _, row in df.iterrows():
+        ts = row['timestamp'] if has_ts else None
         cands = road_network_service.get_candidates(row['lat'], row['lon'], radius=radius)
         if cands:
             best = min(cands, key=lambda x: x['dist_m'])
             p = best['proj_point']
-            matched.append({'lat': p.y, 'lon': p.x})
+            matched.append({'lat': p.y, 'lon': p.x, 'timestamp': ts})
         else:
-            matched.append({'lat': row['lat'], 'lon': row['lon']})
+            matched.append({'lat': row['lat'], 'lon': row['lon'], 'timestamp': ts})
     return pd.DataFrame(matched), "Simple 匹配完成"
 
 
@@ -198,12 +217,17 @@ def _match_ivmm(df, config=None):
             return _match_simple(df)
 
         matched_points = []
-        for cand in matched_candidates:
+        for idx, cand in enumerate(matched_candidates):
+            ts = None
+            if 'timestamp' in cand:
+                ts = cand.get('timestamp')
+            elif idx < len(trajectory):
+                ts = trajectory[idx].get('timestamp')
             if 'proj_point' in cand and cand['proj_point'] is not None:
                 p = cand['proj_point']
-                matched_points.append({'lat': p.y, 'lon': p.x})
+                matched_points.append({'lat': p.y, 'lon': p.x, 'timestamp': ts})
             elif 'lat' in cand and 'lon' in cand:
-                matched_points.append({'lat': cand['lat'], 'lon': cand['lon']})
+                matched_points.append({'lat': cand['lat'], 'lon': cand['lon'], 'timestamp': ts})
 
         if len(matched_points) < 1:
             return _match_simple(df)
