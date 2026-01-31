@@ -21,17 +21,17 @@ def parse_upload_points(content: bytes):
     except Exception:
         df = pd.read_csv(io.BytesIO(content))
 
-    required_cols = ['road', 'status', 'distance', 'duration', 'polyline']
-    missing_cols = [c for c in required_cols if c not in df.columns]
-    if missing_cols:
-        raise ValueError(f"缺少必要字段: {','.join(missing_cols)}")
+    # required_cols = ['road', 'status', 'distance', 'duration', 'polyline']
+    # missing_cols = [c for c in required_cols if c not in df.columns]
+    # if missing_cols:
+    #     raise ValueError(f"缺少必要字段: {','.join(missing_cols)}")
 
-    missing_mask = df[required_cols].isna()
-    empty_mask = df[required_cols].astype(str).apply(lambda s: s.str.strip() == '')
-    any_missing = (missing_mask | empty_mask).any(axis=1)
-    if any_missing.any():
-        missing_rows = int(any_missing.sum())
-        raise ValueError(f"存在缺失值的行数: {missing_rows}")
+    # missing_mask = df[required_cols].isna()
+    # empty_mask = df[required_cols].astype(str).apply(lambda s: s.str.strip() == '')
+    # any_missing = (missing_mask | empty_mask).any(axis=1)
+    # if any_missing.any():
+    #     missing_rows = int(any_missing.sum())
+    #     raise ValueError(f"存在缺失值的行数: {missing_rows}")
 
     df = df.fillna("")
     points = []

@@ -47,6 +47,7 @@ def _match_hmm_leuven(df, config=None):
 
     print(f"    -> [Leuven] 开始匹配...")
     try:
+        road_network_service.ensure_hmm_index()
         map_con = road_network_service.hmm_map
 
         if 'timestamp' in df.columns:

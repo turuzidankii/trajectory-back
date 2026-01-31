@@ -25,6 +25,9 @@ class RoadNetwork:
         self.hmm_map = None
         self.graph = None
         self.edge_geom_map = {}
+        self.sindex_ready = False
+        self.graph_ready = False
+        self.hmm_index_ready = False
 
     @staticmethod
     def _parse_linestring_wkt(wkt: str):
@@ -108,16 +111,50 @@ class RoadNetwork:
             if hasattr(self.hmm_map, "build_spatial_index"):
                 self.hmm_map.build_spatial_index()
                 logging.info("✅ HMM 空间索引已构建")
+                self.hmm_index_ready = True
                 return
             if hasattr(self.hmm_map, "index"):
                 idx = self.hmm_map.index
                 if callable(idx):
                     idx()
                     logging.info("✅ HMM 索引已构建 (index())")
+                    self.hmm_index_ready = True
                 else:
                     logging.info("✅ HMM 索引已存在")
+                    self.hmm_index_ready = True
         except Exception as e:
             logging.warning(f"⚠️ HMM 索引构建失败: {e}")
+            self.hmm_index_ready = False
+
+    def _ensure_sindex(self):
+        """按需构建空间索引（STRtree）。"""
+        if self.sindex_ready and self.sindex is not None:
+            return
+        if self.gdf is None or self.gdf.empty:
+            return
+        if not self.geometries:
+            self.geometries = list(self.gdf['shapely_geom'])
+            self.indices = list(self.gdf.index)
+        logging.info("⚡ 正在构建空间索引...")
+        self.sindex = STRtree(self.geometries)
+        self.sindex_ready = True
+
+    def _ensure_graph(self):
+        """按需构建路网拓扑图。"""
+        if self.graph_ready and self.graph is not None:
+            return
+        self._build_graph_and_edge_map()
+        self.graph_ready = self.graph is not None
+
+    def ensure_sindex(self):
+        self._ensure_sindex()
+
+    def ensure_graph(self):
+        self._ensure_graph()
+
+    def ensure_hmm_index(self):
+        if not self.hmm_index_ready:
+            self._ensure_hmm_index()
 
     def _normalize_node_id(self, node_id):
         """统一节点ID为字符串，避免 123 与 123.0 不匹配。"""
@@ -137,10 +174,12 @@ class RoadNetwork:
         key = self._normalize_node_id(node_id)
         return key in self.graph
 
-    def load_local_file(self):
+    def load_local_file(self, lazy: bool | None = None):
         """
         智能加载：优先读取 .pkl 缓存，如果没有则解析 CSV 并生成缓存
         """
+        if lazy is None:
+            lazy = str(os.environ.get("ROAD_NETWORK_LAZY", "1")).lower() in ("1", "true", "yes")
         if os.path.exists(CACHE_FILE):
             try:
                 logging.info(f"🚀 发现缓存文件，正在快速恢复路网: {CACHE_FILE}")
@@ -157,13 +196,24 @@ class RoadNetwork:
                 if 'SnodeID' in self.gdf.columns and 'EnodeID' in self.gdf.columns:
                     self.gdf['SnodeID'] = self.gdf['SnodeID'].astype(str).map(self._normalize_node_id)
                     self.gdf['EnodeID'] = self.gdf['EnodeID'].astype(str).map(self._normalize_node_id)
-
-                logging.info("⚡ 正在重建空间索引...")
-                self.sindex = STRtree(self.geometries)
-
                 self.is_loaded = True
-                self._build_graph_and_edge_map()
-                self._ensure_hmm_index()
+
+                if not lazy:
+                    logging.info("⚡ 正在重建空间索引...")
+                    self.sindex = STRtree(self.geometries)
+                    self.sindex_ready = True
+                    self._build_graph_and_edge_map()
+                    self.graph_ready = self.graph is not None
+                    self._ensure_hmm_index()
+                else:
+                    self.sindex = None
+                    self.graph = None
+                    self.edge_geom_map = {}
+                    self.sindex_ready = False
+                    self.graph_ready = False
+                    self.hmm_index_ready = False
+                    logging.info("⚡ 已启用懒加载，索引/图将在首次使用时构建")
+
                 logging.info(f"✅ 缓存加载成功! (HMM节点数: {self.hmm_map.size()})")
                 return True, "缓存加载成功"
             except Exception as e:
@@ -242,10 +292,20 @@ class RoadNetwork:
                 self.gdf['EnodeID'] = self.gdf['EnodeID'].astype(str).map(self._normalize_node_id)
             self.geometries = valid_geoms
             self.indices = valid_indices
-            self.sindex = STRtree(self.geometries)
             self.is_loaded = True
-            self._build_graph_and_edge_map()
-            self._ensure_hmm_index()
+            if not lazy:
+                self.sindex = STRtree(self.geometries)
+                self.sindex_ready = True
+                self._build_graph_and_edge_map()
+                self.graph_ready = self.graph is not None
+                self._ensure_hmm_index()
+            else:
+                self.sindex = None
+                self.graph = None
+                self.edge_geom_map = {}
+                self.sindex_ready = False
+                self.graph_ready = False
+                self.hmm_index_ready = False
 
             logging.info(f"💾 正在生成缓存文件 (下次启动将秒开)...")
             try:
@@ -324,12 +384,15 @@ class RoadNetwork:
             else:
                 _add_edge(s_node, e_node)
                 _add_edge(e_node, s_node)
+        self.graph_ready = True
 
     def get_shortest_path_edges(self, u, v):
         """返回最短路径的边序列 [(n1,n2), ...]，失败则空列表。"""
         try:
             if self.graph is None:
-                return []
+                self._ensure_graph()
+                if self.graph is None:
+                    return []
             u_key = self._normalize_node_id(u)
             v_key = self._normalize_node_id(v)
             if u_key not in self.graph or v_key not in self.graph:
@@ -343,6 +406,9 @@ class RoadNetwork:
 
     def get_candidates(self, lat, lon, radius=50):
         if not self.is_loaded:
+            return []
+        self._ensure_sindex()
+        if self.sindex is None:
             return []
         buffer_deg = radius / 111000.0
         query_box = box(lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg)
@@ -369,6 +435,9 @@ class RoadNetwork:
     def query_roads_in_bounds(self, min_lat, min_lon, max_lat, max_lon, buffer=0.01):
         if not self.is_loaded:
             return []
+        self._ensure_sindex()
+        if self.sindex is None:
+            return []
         search_box = box(min_lon - buffer, min_lat - buffer, max_lon + buffer, max_lat + buffer)
         indices = self.sindex.query(search_box)
         segments = []
@@ -380,6 +449,7 @@ class RoadNetwork:
 
     def get_edge_geometry(self, u, v):
         try:
+            self._ensure_graph()
             u_key = self._normalize_node_id(u)
             v_key = self._normalize_node_id(v)
             key = (u_key, v_key)

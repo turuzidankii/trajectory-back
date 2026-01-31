@@ -16,12 +16,19 @@ def check_quality(df, config: dict):
     max_speed = float(config.get('qc_max_speed', 33.3))
     max_angle = float(config.get('qc_max_angle', 60.0))
     max_time_gap = float(config.get('qc_max_time_gap', 60.0))
+    min_turn_dist = float(config.get('qc_min_turn_dist', 2.0))
 
     df['prev_lat'] = df['lat'].shift(1)
     df['prev_lon'] = df['lon'].shift(1)
     lat_diff = (df['lat'] - df['prev_lat']) * 111000
     lon_diff = (df['lon'] - df['prev_lon']) * 111000 * 0.76
     df['dist_m'] = np.sqrt(lat_diff**2 + lon_diff**2).fillna(0)
+
+    df['next_lat'] = df['lat'].shift(-1)
+    df['next_lon'] = df['lon'].shift(-1)
+    lat_diff_next = (df['next_lat'] - df['lat']) * 111000
+    lon_diff_next = (df['next_lon'] - df['lon']) * 111000 * 0.76
+    df['dist_next_m'] = np.sqrt(lat_diff_next**2 + lon_diff_next**2).fillna(0)
 
     if 'timestamp' in df.columns:
         df['time_diff'] = df['timestamp'].diff().dt.total_seconds().fillna(0)
@@ -30,9 +37,14 @@ def check_quality(df, config: dict):
 
     df['speed_mps'] = (df['dist_m'] / df['time_diff'].replace(0, 0.001)).fillna(0)
 
-    df['heading'] = np.degrees(np.arctan2(lat_diff, lon_diff))
-    df['heading_diff'] = df['heading'].diff().abs().fillna(0)
-    df['heading_diff'] = df['heading_diff'].apply(lambda x: min(x, 360 - x))
+    df['heading_prev'] = np.degrees(np.arctan2(lat_diff, lon_diff))
+    df['heading_next'] = np.degrees(np.arctan2(lat_diff_next, lon_diff_next))
+
+    raw_diff = (df['heading_next'] - df['heading_prev']).abs()
+    df['heading_diff'] = raw_diff.apply(lambda x: min(x, 360 - x))
+
+    invalid_turn = (df['dist_m'] < min_turn_dist) | (df['dist_next_m'] < min_turn_dist)
+    df.loc[invalid_turn, 'heading_diff'] = 0.0
 
     mask_integrity = (
         (df['road'] == '')
@@ -43,7 +55,11 @@ def check_quality(df, config: dict):
     )
     mask_time = df['time_diff'] > max_time_gap
     mask_speed = df['speed_mps'] > max_speed
-    mask_angle = (df['heading_diff'] > max_angle) & (df['dist_m'] > 2.0)
+    mask_angle = (
+        (df['heading_diff'] > max_angle)
+        & (df['dist_m'] >= min_turn_dist)
+        & (df['dist_next_m'] >= min_turn_dist)
+    )
 
     df['qc_status'] = '正常'
     df['qc_tags'] = [[] for _ in range(len(df))]

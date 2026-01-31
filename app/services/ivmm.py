@@ -15,6 +15,7 @@ class SimpleIVMM:
         self.search_radius = search_radius
         self.w_dist = w_dist
         self.w_heading = w_heading
+        road_network_service.ensure_graph()
         self.graph = road_network_service.graph
 
     def _get_heading(self, p1, p2):
