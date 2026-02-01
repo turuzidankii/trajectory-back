@@ -1,7 +1,9 @@
 import os
+import time
 import pandas as pd
 from app.services.road_network import road_network_service
 from app.services.ivmm import SimpleIVMM
+from app.services.astar_fill import fill_path_astar
 
 # 引入 LeuvenMapMatching
 try:
@@ -21,12 +23,19 @@ def map_match(df_input, algorithm='Simple', config=None):
     if not road_network_service.is_loaded:
         return df_input.copy(), "❌ 路网未加载"
 
+    algo_start = time.perf_counter()
     if algorithm == 'HMM':
         res, msg = _match_hmm_leuven(df_input, config)
     elif algorithm == 'IVMM':
         res, msg = _match_ivmm(df_input, config)
     else:
         res, msg = _match_simple(df_input)
+    algo_cost = (time.perf_counter() - algo_start)
+    print(f"    -> [路径匹配] 算法耗时: {algo_cost:.2f} s")
+
+    if config.get('astar_fill', True):
+        res, astar_msg = fill_path_astar(res, config)
+        msg = f"{msg}; {astar_msg}"
 
     output_path = os.path.join(os.path.dirname(__file__), '../../output', 'match_result.csv')
     try:
@@ -38,6 +47,8 @@ def map_match(df_input, algorithm='Simple', config=None):
 
     print(f">>> [路径匹配] 结束")
     return res, msg
+
+
 
 
 def _match_hmm_leuven(df, config=None):
@@ -79,7 +90,7 @@ def _match_hmm_leuven(df, config=None):
             max_dist=500,
             obs_noise=30,
             obs_noise_ne=50,
-            max_lattice_width=50,
+            max_lattice_width=5,
         )
 
         print(f"    -> [Leuven] 执行 Viterbi 算法...")

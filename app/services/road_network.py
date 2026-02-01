@@ -24,6 +24,7 @@ class RoadNetwork:
         self.is_loaded = False
         self.hmm_map = None
         self.graph = None
+        self.node_coord_map = {}
         self.edge_geom_map = {}
         self.sindex_ready = False
         self.graph_ready = False
@@ -333,10 +334,12 @@ class RoadNetwork:
         if self.gdf is None or self.gdf.empty:
             self.graph = None
             self.edge_geom_map = {}
+            self.node_coord_map = {}
             return
 
         self.graph = nx.DiGraph()
         self.edge_geom_map = {}
+        self.node_coord_map = {}
 
         def _line_length_m(line):
             coords = list(line.coords)
@@ -359,6 +362,16 @@ class RoadNetwork:
             e_node = self._normalize_node_id(row.get('EnodeID', ''))
             if not s_node or not e_node:
                 continue
+
+            try:
+                start_lon, start_lat = geom.coords[0]
+                end_lon, end_lat = geom.coords[-1]
+                if s_node not in self.node_coord_map:
+                    self.node_coord_map[s_node] = (start_lat, start_lon)
+                if e_node not in self.node_coord_map:
+                    self.node_coord_map[e_node] = (end_lat, end_lon)
+            except Exception:
+                pass
 
             length_m = _line_length_m(geom)
             direction = row.get('Direction', 1)
@@ -404,6 +417,36 @@ class RoadNetwork:
         except Exception:
             return []
 
+    def get_astar_path_edges(self, u, v):
+        """返回 A* 最短路径的边序列 [(n1,n2), ...]，失败则空列表。"""
+        try:
+            if self.graph is None:
+                self._ensure_graph()
+                if self.graph is None:
+                    return []
+            u_key = self._normalize_node_id(u)
+            v_key = self._normalize_node_id(v)
+            if u_key not in self.graph or v_key not in self.graph:
+                return []
+
+            def _heuristic(a, b):
+                ca = self.node_coord_map.get(a)
+                cb = self.node_coord_map.get(b)
+                if not ca or not cb:
+                    return 0.0
+                lat1, lon1 = ca
+                lat2, lon2 = cb
+                dx = (lon2 - lon1) * 111000 * 0.76
+                dy = (lat2 - lat1) * 111000
+                return (dx * dx + dy * dy) ** 0.5
+
+            path_nodes = nx.astar_path(self.graph, u_key, v_key, heuristic=_heuristic, weight='length')
+            if not path_nodes or len(path_nodes) < 2:
+                return []
+            return list(zip(path_nodes[:-1], path_nodes[1:]))
+        except Exception:
+            return []
+
     def get_candidates(self, lat, lon, radius=50):
         if not self.is_loaded:
             return []
@@ -429,6 +472,39 @@ class RoadNetwork:
                     "dist_m": dist_m,
                     "proj_point": proj_point,
                     "geometry": geom,
+                })
+        return candidates
+
+    def get_candidates_with_nodes(self, lat, lon, radius=50):
+        """返回带起终点节点ID的候选路段。"""
+        if not self.is_loaded:
+            return []
+        self._ensure_sindex()
+        if self.sindex is None:
+            return []
+        buffer_deg = radius / 111000.0
+        query_box = box(lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg)
+        candidate_indices = self.sindex.query(query_box)
+        candidates = []
+        point = Point(lon, lat)
+        for idx in candidate_indices:
+            geom = self.geometries[idx]
+            dist_deg = point.distance(geom)
+            dist_m = dist_deg * 111000
+            if dist_m <= radius:
+                row_idx = self.indices[idx]
+                row = self.gdf.loc[row_idx]
+                proj_dist = geom.project(point)
+                proj_point = geom.interpolate(proj_dist)
+                s_node = self._normalize_node_id(row.get('SnodeID', ''))
+                e_node = self._normalize_node_id(row.get('EnodeID', ''))
+                candidates.append({
+                    "edge_id": row.get('ID', idx),
+                    "dist_m": dist_m,
+                    "proj_point": proj_point,
+                    "geometry": geom,
+                    "s_node": s_node,
+                    "e_node": e_node,
                 })
         return candidates
 

@@ -39,38 +39,72 @@ def preprocess_pipeline(df, config: dict):
                 agg_rules[col] = 'first'
         df = df.groupby('group_id', as_index=False).agg(agg_rules)
 
-    if config.get('enable_kalman', True):
+    denoise_algo = config.get('denoise_algo', 'kalman').lower()
+
+    if denoise_algo == 'median':
+        print(f"    -> 执行: 中值滤波")
+        df = apply_median_filter(df, config)
+    elif denoise_algo == 'rts':
+        print(f"    -> 执行: RTS平滑")
+        df = apply_rts(df, config)
+    else:
         print(f"    -> 执行: 卡尔曼滤波")
-        try:
-            user_R = float(config.get('kalman_R', 0.01))
-            user_Q = float(config.get('kalman_Q', 1000.0))
-
-            dim_x, dim_z, dt = 4, 2, 1.0
-            F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
-            H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]])
-            P = np.eye(dim_x) * 1000.0
-            R = np.eye(dim_z) * user_R
-            Q = np.eye(dim_x) * user_Q
-
-            if len(df) > 0:
-                x = np.array([df.iloc[0]['lat'], df.iloc[0]['lon'], 0., 0.])
-                smoothed = []
-                for _, row in df.iterrows():
-                    z = np.array([row['lat'], row['lon']])
-                    x = F @ x
-                    P = F @ P @ F.T + Q
-                    S = H @ P @ H.T + R
-                    K = P @ H.T @ np.linalg.inv(S)
-                    y = z - H @ x
-                    x = x + K @ y
-                    P = (np.eye(dim_x) - K @ H) @ P
-                    smoothed.append({'lat': x[0], 'lon': x[1]})
-
-                res_df = pd.DataFrame(smoothed)
-                df['lat'] = res_df['lat']
-                df['lon'] = res_df['lon']
-        except Exception as e:
-            print(f"❌ 卡尔曼滤波出错: {e}")
+        df = apply_kalman_filter(df, config)
 
     print(f">>> [预处理] 结束，耗时 {time.time() - start_time:.2f}s")
     return df
+
+
+def apply_median_filter(df, config: dict):
+    """中值滤波：对 lat/lon 进行滚动中值平滑。"""
+    try:
+        window = int(config.get('median_window', 3))
+        if window < 1:
+            return df
+        if window % 2 == 0:
+            window += 1
+
+        df = df.copy()
+        df['lat'] = df['lat'].rolling(window=window, center=True, min_periods=1).median()
+        df['lon'] = df['lon'].rolling(window=window, center=True, min_periods=1).median()
+        return df
+    except Exception as e:
+        print(f"❌ 中值滤波出错: {e}")
+        return df
+
+
+def apply_kalman_filter(df, config: dict):
+    """卡尔曼滤波：对 lat/lon 进行平滑。"""
+    try:
+        user_R = float(config.get('kalman_R', 0.01))
+        user_Q = float(config.get('kalman_Q', 1000.0))
+
+        dim_x, dim_z, dt = 4, 2, 1.0
+        F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]])
+        H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]])
+        P = np.eye(dim_x) * 1000.0
+        R = np.eye(dim_z) * user_R
+        Q = np.eye(dim_x) * user_Q
+
+        if len(df) > 0:
+            x = np.array([df.iloc[0]['lat'], df.iloc[0]['lon'], 0., 0.])
+            smoothed = []
+            for _, row in df.iterrows():
+                z = np.array([row['lat'], row['lon']])
+                x = F @ x
+                P = F @ P @ F.T + Q
+                S = H @ P @ H.T + R
+                K = P @ H.T @ np.linalg.inv(S)
+                y = z - H @ x
+                x = x + K @ y
+                P = (np.eye(dim_x) - K @ H) @ P
+                smoothed.append({'lat': x[0], 'lon': x[1]})
+
+            res_df = pd.DataFrame(smoothed)
+            df = df.copy()
+            df['lat'] = res_df['lat']
+            df['lon'] = res_df['lon']
+        return df
+    except Exception as e:
+        print(f"❌ 卡尔曼滤波出错: {e}")
+        return df
