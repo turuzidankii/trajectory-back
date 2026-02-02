@@ -76,9 +76,9 @@ def check_quality(df, config: dict):
     for idx in df[mask_time].index:
         df.at[idx, 'qc_tags'].append('时间断裂')
     for idx in df[mask_speed].index:
-        df.at[idx, 'qc_tags'].append(f'速度过快({df.at[idx, "speed_mps"]:.1f}m/s)')
+        df.at[idx, 'qc_tags'].append(f'速度过快')
     for idx in df[mask_angle].index:
-        df.at[idx, 'qc_tags'].append(f'急转弯({df.at[idx, "heading_diff"]:.0f}°)')
+        df.at[idx, 'qc_tags'].append(f'急转弯')
 
     def format_status(tags):
         return " | ".join(tags) if tags else "正常"

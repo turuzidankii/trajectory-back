@@ -85,12 +85,17 @@ def _match_hmm_leuven(df, config=None):
                 cands_200 = road_network_service.get_candidates(lat, lon, radius=200)
                 print(f"    -> [Diag] sample[{idx}] candidates r=50: {len(cands_50)}, r=200: {len(cands_200)}")
 
+        hmm_max_dist = float(config.get('hmm_max_dist', 500))
+        hmm_obs_noise = float(config.get('hmm_obs_noise', 30))
+        hmm_obs_noise_ne = float(config.get('hmm_obs_noise_ne', 50))
+        hmm_max_lattice_width = int(config.get('hmm_max_lattice_width', 5))
+
         matcher = DistanceMatcher(
             map_con,
-            max_dist=500,
-            obs_noise=30,
-            obs_noise_ne=50,
-            max_lattice_width=5,
+            max_dist=hmm_max_dist,
+            obs_noise=hmm_obs_noise,
+            obs_noise_ne=hmm_obs_noise_ne,
+            max_lattice_width=hmm_max_lattice_width,
         )
 
         print(f"    -> [Leuven] 执行 Viterbi 算法...")

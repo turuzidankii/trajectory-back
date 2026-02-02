@@ -17,6 +17,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "服务已启动，访问 /docs 查看接口文档"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
