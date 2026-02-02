@@ -153,19 +153,19 @@ def _match_hmm_leuven(df, config=None):
                     if cu is not None:
                         pt = (cu[0], cu[1])
                         if pt != last_point:
-                            matched_points.append({'lat': cu[0], 'lon': cu[1], 'timestamp': ts})
+                            matched_points.append({'lat': cu[0], 'lon': cu[1], 'timestamp': ts, 'raw_index': idx})
                             last_point = pt
                     if cv is not None:
                         pt = (cv[0], cv[1])
                         if pt != last_point:
-                            matched_points.append({'lat': cv[0], 'lon': cv[1], 'timestamp': ts})
+                            matched_points.append({'lat': cv[0], 'lon': cv[1], 'timestamp': ts, 'raw_index': idx})
                             last_point = pt
                 else:
                     coord = map_con.node_coordinates(item)
                     if coord is not None:
                         pt = (coord[0], coord[1])
                         if pt != last_point:
-                            matched_points.append({'lat': coord[0], 'lon': coord[1], 'timestamp': ts})
+                            matched_points.append({'lat': coord[0], 'lon': coord[1], 'timestamp': ts, 'raw_index': idx})
                             last_point = pt
             except Exception as parse_e:
                 if debug_match:
@@ -173,10 +173,86 @@ def _match_hmm_leuven(df, config=None):
 
         print(f"✅ [Leuven] 成功生成 {len(matched_points)} 个匹配点")
 
-        if len(matched_points) < 2:
-            if debug_match:
-                print("    -> [Diag] HMM 输出过短，回退到 Simple(半径200m)")
-            return _match_simple(df, radius=200)
+        if timestamps is not None and len(matched_points) > len(timestamps):
+            try:
+                import pandas as _pd
+
+                def _haversine_m(lat1, lon1, lat2, lon2):
+                    from math import radians, sin, cos, asin, sqrt
+                    r = 6371000.0
+                    dlat = radians(lat2 - lat1)
+                    dlon = radians(lon2 - lon1)
+                    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+                    return 2 * r * asin(sqrt(a))
+
+                ts_series = _pd.to_datetime(_pd.Series(timestamps), errors='coerce')
+                if not ts_series.isna().any():
+                    anchors = []
+                    for i in range(len(timestamps)):
+                        for mp_idx in range(len(matched_points) - 1, -1, -1):
+                            if matched_points[mp_idx].get('raw_index') == i:
+                                anchors.append((mp_idx, ts_series.iloc[i]))
+                                break
+
+                    anchors = sorted(set(anchors), key=lambda x: x[0])
+
+                    if len(anchors) >= 1:
+                        first_idx, first_ts = anchors[0]
+                        for j in range(0, first_idx + 1):
+                            matched_points[j]['timestamp'] = first_ts
+
+                        for k in range(len(anchors) - 1):
+                            a_idx, a_ts = anchors[k]
+                            b_idx, b_ts = anchors[k + 1]
+                            if b_idx <= a_idx:
+                                continue
+
+                            dists = [0.0]
+                            for j in range(a_idx + 1, b_idx + 1):
+                                p1 = matched_points[j - 1]
+                                p2 = matched_points[j]
+                                dists.append(dists[-1] + _haversine_m(p1['lat'], p1['lon'], p2['lat'], p2['lon']))
+
+                            total = dists[-1]
+                            for step, j in enumerate(range(a_idx, b_idx + 1)):
+                                ratio = (dists[step] / total) if total > 0 else (step / (b_idx - a_idx))
+                                matched_points[j]['timestamp'] = a_ts + (b_ts - a_ts) * ratio
+
+                        last_idx, last_ts = anchors[-1]
+                        if len(anchors) >= 2:
+                            prev_idx, prev_ts = anchors[-2]
+                            if last_idx > prev_idx and last_ts > prev_ts:
+                                dists_tail = [0.0]
+                                for j in range(prev_idx + 1, last_idx + 1):
+                                    p1 = matched_points[j - 1]
+                                    p2 = matched_points[j]
+                                    dists_tail.append(dists_tail[-1] + _haversine_m(p1['lat'], p1['lon'], p2['lat'], p2['lon']))
+
+                                tail_dist = dists_tail[-1]
+                                speed_mps = tail_dist / (last_ts - prev_ts).total_seconds() if tail_dist > 0 else 0.0
+
+                                if speed_mps > 0:
+                                    extra_dists = [0.0]
+                                    for j in range(last_idx + 1, len(matched_points)):
+                                        p1 = matched_points[j - 1]
+                                        p2 = matched_points[j]
+                                        extra_dists.append(extra_dists[-1] + _haversine_m(p1['lat'], p1['lon'], p2['lat'], p2['lon']))
+
+                                    for offset, j in enumerate(range(last_idx, len(matched_points))):
+                                        add_seconds = extra_dists[offset] / speed_mps if speed_mps > 0 else 0
+                                        matched_points[j]['timestamp'] = last_ts + _pd.Timedelta(seconds=add_seconds)
+                                else:
+                                    for j in range(last_idx, len(matched_points)):
+                                        matched_points[j]['timestamp'] = last_ts
+                            else:
+                                for j in range(last_idx, len(matched_points)):
+                                    matched_points[j]['timestamp'] = last_ts
+                        else:
+                            for j in range(last_idx, len(matched_points)):
+                                matched_points[j]['timestamp'] = last_ts
+            except Exception as interp_e:
+                if debug_match:
+                    print(f"    -> [Diag] 时间插值失败: {interp_e}")
 
         return pd.DataFrame(matched_points), "✅ HMM 匹配成功"
 
