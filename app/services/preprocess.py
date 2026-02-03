@@ -15,6 +15,11 @@ def preprocess_pipeline(df, config: dict):
         return df
     
     stop_cluster_algo = config.get('stop_cluster_algo', 'basic')
+    denoise_algo = config.get('denoise_algo', 'kalman')
+
+    if stop_cluster_algo == 'none' and denoise_algo == 'none':
+        print(f">>> [预处理] 未选择任何预处理算法，直接返回原始数据")
+        return df
 
     if stop_cluster_algo == 'spatiotemporal':
         print(f"    -> 执行: 时空阈值聚类")
@@ -22,8 +27,6 @@ def preprocess_pipeline(df, config: dict):
     elif stop_cluster_algo == 'density':
         print(f"    -> 执行: 密度聚类")
         df = apply_stop_cluster_density(df, config)
-
-    denoise_algo = config.get('denoise_algo', 'kalman')
 
     if denoise_algo == 'median':
         print(f"    -> 执行: 中值滤波")
