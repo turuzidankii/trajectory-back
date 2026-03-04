@@ -12,6 +12,9 @@ def check_quality(df, config: dict):
     df = df.copy()
     total_points = len(df)
 
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+
     weights = config.get('quality_weights', {'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25})
     max_speed = float(config.get('qc_max_speed', 33.3))
     max_angle = float(config.get('qc_max_angle', 60.0))
@@ -46,9 +49,12 @@ def check_quality(df, config: dict):
     invalid_turn = (df['dist_m'] < min_turn_dist) | (df['dist_next_m'] < min_turn_dist)
     df.loc[invalid_turn, 'heading_diff'] = 0.0
 
+    road_col = df['road'] if 'road' in df.columns else pd.Series([''] * total_points, index=df.index)
+    status_col = df['status'] if 'status' in df.columns else pd.Series([''] * total_points, index=df.index)
+
     mask_integrity = (
-        (df['road'] == '')
-        | (df['status'] == '')
+        (road_col == '')
+        | (status_col == '')
         | (df['lat'].isnull())
         | (df['lon'].isnull())
         | ((df['lat'] == 0) & (df['lon'] == 0))
@@ -103,8 +109,8 @@ def check_quality(df, config: dict):
     for idx, row in df.iterrows():
         details_list.append({
             "id": idx,
-            "road": row['road'],
-            "situation": row['status'],
+            "road": row.get('road', '-'),
+            "situation": row.get('status', '-'),
             "timestamp": row['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(row.get('timestamp')) else '-',
             "lat": row['lat'],
             "lon": row['lon'],

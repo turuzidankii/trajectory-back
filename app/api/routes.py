@@ -82,6 +82,16 @@ async def process(data: dict):
     else:
         df_matched, msg = map_match(df_cleaned, match_algo, config)
 
+    qc_post_summary = None
+    qc_post_details = None
+    try:
+        df_post_qc = df_matched.copy()
+        if 'timestamp' in df_post_qc.columns:
+            df_post_qc['timestamp'] = parse_timestamps(df_post_qc['timestamp'])
+        qc_post_summary, qc_post_details = check_quality(df_post_qc, config)
+    except Exception as qc_e:
+        print(f"⚠️ [匹配] 质量检测失败: {qc_e}")
+
     return {
         "trajectory_processed": df_cleaned.to_dict(orient='records'),
         "trajectory_matched": df_matched.to_dict(orient='records'),
@@ -89,5 +99,7 @@ async def process(data: dict):
         "skipped_match": match_algo is None,
         "qc_pre_summary": qc_summary,
         "qc_pre_details": qc_details,
+        "qc_post_summary": qc_post_summary,
+        "qc_post_details": qc_post_details,
         "message": msg,
     }

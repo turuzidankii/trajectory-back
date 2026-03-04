@@ -45,18 +45,18 @@ def parse_upload_points(content: bytes):
             if not polyline_str or polyline_str.lower() == 'nan':
                 continue
 
-            raw_points = []
             parts = polyline_str.split('|')
-            for pt_str in parts:
-                if '-' in pt_str:
-                    try:
-                        lon_str, lat_str = pt_str.split('-')
-                        lon, lat = float(lon_str), float(lat_str)
-                        raw_points.append((lat, lon))
-                    except Exception:
-                        continue
+            if not parts:
+                continue
 
-            if not raw_points:
+            first_point = parts[0]
+            if '-' not in first_point:
+                continue
+
+            try:
+                lon_str, lat_str = first_point.split('-')
+                lon, lat = float(lon_str), float(lat_str)
+            except Exception:
                 continue
 
             segment_duration = 0
@@ -65,23 +65,15 @@ def parse_upload_points(content: bytes):
             except Exception:
                 segment_duration = 0
 
-            n_pts = len(raw_points)
-            dt = 0
-            if n_pts > 1 and segment_duration > 0:
-                dt = segment_duration / (n_pts - 1)
-
-            for i, (lat, lon) in enumerate(raw_points):
-                pt_time = current_base_time + pd.Timedelta(seconds=i * dt)
-
-                points.append({
-                    'id': len(points),
-                    'lat': lat,
-                    'lon': lon,
-                    'timestamp': pt_time,
-                    'road': str(row.get('road', '')),
-                    'status': str(row.get('status', '')),
-                    'orig_duration': segment_duration if i == 0 else 0,
-                })
+            points.append({
+                'id': len(points),
+                'lat': lat,
+                'lon': lon,
+                'timestamp': current_base_time,
+                'road': str(row.get('road', '')),
+                'status': str(row.get('status', '')),
+                'orig_duration': segment_duration,
+            })
 
             step = segment_duration if segment_duration > 0 else 1.0
             current_base_time += pd.Timedelta(seconds=step)

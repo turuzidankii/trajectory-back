@@ -254,6 +254,34 @@ def _match_hmm_leuven(df, config=None):
                 if debug_match:
                     print(f"    -> [Diag] 时间插值失败: {interp_e}")
 
+        if timestamps is not None and len(matched_points) > 0:
+            try:
+                import pandas as _pd
+                min_dt_seconds = float(config.get('hmm_interp_min_dt_seconds', 0.1))
+                if min_dt_seconds <= 0:
+                    min_dt_seconds = 0.1
+                min_delta = _pd.Timedelta(seconds=min_dt_seconds)
+
+                normalized = []
+                for p in matched_points:
+                    ts = _pd.to_datetime(p.get('timestamp'), errors='coerce')
+                    normalized.append(ts if _pd.notnull(ts) else None)
+
+                has_any_ts = any(ts is not None for ts in normalized)
+                if has_any_ts:
+                    first_valid_ts = next(ts for ts in normalized if ts is not None)
+                    prev_ts = first_valid_ts - min_delta
+                    for i, current_ts in enumerate(normalized):
+                        if current_ts is None:
+                            current_ts = prev_ts + min_delta
+                        elif current_ts <= prev_ts:
+                            current_ts = prev_ts + min_delta
+                        matched_points[i]['timestamp'] = current_ts
+                        prev_ts = current_ts
+            except Exception as ts_fix_e:
+                if debug_match:
+                    print(f"    -> [Diag] 时间单调修正失败: {ts_fix_e}")
+
         return pd.DataFrame(matched_points), "✅ HMM 匹配成功"
 
     except Exception as e:
