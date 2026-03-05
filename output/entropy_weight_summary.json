@@ -1,0 +1,11 @@
+{
+  "sample_count": 101,
+  "weights": {
+    "time": 0.298420936980368,
+    "integrity": 0.15802489517386853,
+    "speed": 0.14102461331391533,
+    "angle": 0.4025295545318482
+  },
+  "indicator_table": "output\\entropy_indicator_table.csv",
+  "weight_detail": "output\\entropy_weight_detail.csv"
+}

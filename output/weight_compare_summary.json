@@ -1,0 +1,39 @@
+{
+  "sample_count": 101,
+  "weights": {
+    "entropy": {
+      "time_rate": 0.298420936980368,
+      "integrity_rate": 0.15802489517386142,
+      "speed_rate": 0.14102461331391533,
+      "angle_rate": 0.40252955453185524
+    },
+    "equal": {
+      "time_rate": 0.25,
+      "integrity_rate": 0.25,
+      "speed_rate": 0.25,
+      "angle_rate": 0.25
+    },
+    "ahp": {
+      "time_rate": 0.2628328685746509,
+      "integrity_rate": 0.14087958377800433,
+      "speed_rate": 0.14087958377800425,
+      "angle_rate": 0.4554079638693405
+    },
+    "critic": {
+      "time_rate": 0.27933257751359336,
+      "integrity_rate": 0.22476744437969992,
+      "speed_rate": 0.20500995352365847,
+      "angle_rate": 0.2908900245830483
+    }
+  },
+  "ahp_consistency": {
+    "lambda_max": 4.010362902240904,
+    "CI": 0.00345430074696799,
+    "CR": 0.0038381119410755443
+  },
+  "outputs": {
+    "weights": "output\\weight_compare_weights.csv",
+    "scores": "output\\weight_compare_scores.csv",
+    "spearman": "output\\weight_compare_spearman.csv"
+  }
+}

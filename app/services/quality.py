@@ -15,9 +15,12 @@ def check_quality(df, config: dict):
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
-    weights = config.get('quality_weights', {'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25})
+    weights = config.get('quality_weights', {'time': 0.3, 'integrity': 0.16, 'speed': 0.14, 'angle': 0.4})
+    # weights = config.get('quality_weights', {'time': 0.25, 'integrity': 0.25, 'speed': 0.25, 'angle': 0.25})
     max_speed = float(config.get('qc_max_speed', 33.3))
+    max_accel = float(config.get('qc_max_accel', 8.0))
     max_angle = float(config.get('qc_max_angle', 60.0))
+    max_yaw_rate = float(config.get('qc_max_yaw_rate', 30.0))
     max_time_gap = float(config.get('qc_max_time_gap', 60.0))
     min_turn_dist = float(config.get('qc_min_turn_dist', 2.0))
 
@@ -39,6 +42,7 @@ def check_quality(df, config: dict):
         df['time_diff'] = 1.0
 
     df['speed_mps'] = (df['dist_m'] / df['time_diff'].replace(0, 0.001)).fillna(0)
+    df['accel_mps2'] = (df['speed_mps'].diff().abs() / df['time_diff'].replace(0, 0.001)).fillna(0)
 
     df['heading_prev'] = np.degrees(np.arctan2(lat_diff, lon_diff))
     df['heading_next'] = np.degrees(np.arctan2(lat_diff_next, lon_diff_next))
@@ -48,6 +52,7 @@ def check_quality(df, config: dict):
 
     invalid_turn = (df['dist_m'] < min_turn_dist) | (df['dist_next_m'] < min_turn_dist)
     df.loc[invalid_turn, 'heading_diff'] = 0.0
+    df['yaw_rate_dps'] = (df['heading_diff'] / df['time_diff'].replace(0, 0.001)).fillna(0)
 
     road_col = df['road'] if 'road' in df.columns else pd.Series([''] * total_points, index=df.index)
     status_col = df['status'] if 'status' in df.columns else pd.Series([''] * total_points, index=df.index)
@@ -60,9 +65,10 @@ def check_quality(df, config: dict):
         | ((df['lat'] == 0) & (df['lon'] == 0))
     )
     mask_time = df['time_diff'] > max_time_gap
-    mask_speed = df['speed_mps'] > max_speed
+    mask_speed = (df['speed_mps'] > max_speed) | (df['accel_mps2'] > max_accel)
     mask_angle = (
         (df['heading_diff'] > max_angle)
+        & (df['yaw_rate_dps'] > max_yaw_rate)
         & (df['dist_m'] >= min_turn_dist)
         & (df['dist_next_m'] >= min_turn_dist)
     )
@@ -82,9 +88,9 @@ def check_quality(df, config: dict):
     for idx in df[mask_time].index:
         df.at[idx, 'qc_tags'].append('时间断裂')
     for idx in df[mask_speed].index:
-        df.at[idx, 'qc_tags'].append(f'速度过快')
+        df.at[idx, 'qc_tags'].append('速度异常')
     for idx in df[mask_angle].index:
-        df.at[idx, 'qc_tags'].append(f'急转弯')
+        df.at[idx, 'qc_tags'].append('转角异常')
 
     def format_status(tags):
         return " | ".join(tags) if tags else "正常"

@@ -101,7 +101,9 @@ def parse_upload_points(content: bytes):
 
     default_config = {
         'qc_max_speed': 33.3,
+        'qc_max_accel': 8.0,
         'qc_max_angle': 60.0,
+        'qc_max_yaw_rate': 45.0,
         'qc_max_time_gap': 60.0,
     }
 
